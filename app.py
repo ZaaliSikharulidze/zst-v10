@@ -4,9 +4,9 @@ import requests
 import numpy as np
 import sqlite3
 
-st.set_page_config(page_title="ZST PRO SaaS", layout="wide")
+st.set_page_config(page_title="ZST LEVEL 3 PRO ML", layout="wide")
 
-st.title("🚀 ZST LEVEL 2 PRO SAAS")
+st.title("🚀 ZST LEVEL 3 PRO ML SAAS")
 
 # =====================================================
 # AUTO REFRESH
@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS signals (
     macd REAL,
     signal REAL,
     momentum REAL,
+    volatility REAL,
+    probability REAL,
     decision TEXT,
     score REAL
 )
@@ -41,16 +43,17 @@ CREATE TABLE IF NOT EXISTS signals (
 
 conn.commit()
 
-def save_signal(price, rsi, macd, signal, momentum, decision, score):
+def save_signal(data):
     cursor.execute("""
         INSERT INTO signals (
-            price, rsi, macd, signal, momentum, decision, score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (price, rsi, macd, signal, momentum, decision, score))
+            price, rsi, macd, signal, momentum,
+            volatility, probability, decision, score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, data)
     conn.commit()
 
 # =====================================================
-# DATA (COINGECKO ONLY)
+# DATA (COINGECKO)
 # =====================================================
 
 @st.cache_data(ttl=30)
@@ -58,20 +61,16 @@ def get_data():
 
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1"
 
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
+    r = requests.get(url, timeout=10)
+    data = r.json()
 
-        if not data or len(data) < 20:
-            return None
-
-        df = pd.DataFrame(data, columns=["time","open","high","low","close"])
-        df["close"] = df["close"].astype(float)
-
-        return df
-
-    except:
+    if not data or len(data) < 30:
         return None
+
+    df = pd.DataFrame(data, columns=["time","open","high","low","close"])
+    df["close"] = df["close"].astype(float)
+
+    return df
 
 def get_price(df):
     return float(df["close"].iloc[-1])
@@ -91,19 +90,14 @@ def rsi(series, period=14):
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi_series = 100 - (100 / (1 + rs))
 
-    last = rsi_series.dropna()
-    return float(last.iloc[-1]) if len(last) else 50
+    return float(rsi_series.dropna().iloc[-1]) if len(rsi_series.dropna()) else 50
 
 def ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
 def macd(series):
-    ema12 = ema(series, 12)
-    ema26 = ema(series, 26)
-
-    macd_line = ema12 - ema26
+    macd_line = ema(series, 12) - ema(series, 26)
     signal = ema(macd_line, 9)
-
     return macd_line.iloc[-1], signal.iloc[-1]
 
 def momentum(df):
@@ -111,51 +105,46 @@ def momentum(df):
         return 0
     return ((df["close"].iloc[-1] - df["close"].iloc[-20]) / df["close"].iloc[-20]) * 100
 
-# =====================================================
-# AI LOGIC
-# =====================================================
-
-def ai(rsi_v, macd_v, signal_v, mom):
-
-    score = 0
-    reasons = []
-
-    if rsi_v < 30:
-        score += 2
-        reasons.append("RSI oversold")
-    elif rsi_v > 70:
-        score -= 2
-        reasons.append("RSI overbought")
-
-    if macd_v > signal_v:
-        score += 2
-        reasons.append("MACD bullish")
-    else:
-        score -= 2
-        reasons.append("MACD bearish")
-
-    if mom > 0:
-        score += 1
-        reasons.append("Positive momentum")
-    else:
-        score -= 1
-        reasons.append("Negative momentum")
-
-    if score >= 4:
-        decision = "🟢 STRONG BUY"
-    elif score >= 2:
-        decision = "🟢 BUY"
-    elif score <= -4:
-        decision = "🔴 STRONG SELL"
-    elif score <= -2:
-        decision = "🔴 SELL"
-    else:
-        decision = "⚪ WAIT"
-
-    return decision, reasons, score
+def volatility(series):
+    return float(series.pct_change().std() * 100)
 
 # =====================================================
-# BACKTEST
+# ML-LIKE PROBABILITY MODEL (NO LIBRARY VERSION)
+# =====================================================
+
+def ml_score(rsi_v, macd_v, signal_v, mom, vol):
+
+    # normalize features
+    rsi_score = (50 - rsi_v) / 50
+    macd_score = 1 if macd_v > signal_v else -1
+    mom_score = np.tanh(mom / 5)
+    vol_penalty = -vol / 10
+
+    raw = (
+        rsi_score * 0.35 +
+        macd_score * 0.35 +
+        mom_score * 0.2 +
+        vol_penalty * 0.1
+    )
+
+    # sigmoid → probability
+    prob = 1 / (1 + np.exp(-raw))
+
+    return float(prob), float(raw)
+
+# =====================================================
+# DYNAMIC THRESHOLD
+# =====================================================
+
+def threshold(vol):
+    if vol > 2:
+        return 0.65
+    elif vol > 1:
+        return 0.6
+    return 0.55
+
+# =====================================================
+# BACKTEST (ML VERSION)
 # =====================================================
 
 def backtest(df):
@@ -163,40 +152,29 @@ def backtest(df):
     balance = 1000
     position = 0
     entry = 0
+    fee = 0.001
 
-    for i in range(20, len(df)):
+    for i in range(30, len(df)):
 
         window = df["close"].iloc[:i]
 
         rsi_v = rsi(window)
         macd_v, signal_v = macd(window)
         mom = momentum(df.iloc[:i])
+        vol = volatility(window)
 
-        score = 0
+        prob, _ = ml_score(rsi_v, macd_v, signal_v, mom, vol)
 
-        if rsi_v < 30:
-            score += 2
-        elif rsi_v > 70:
-            score -= 2
-
-        if macd_v > signal_v:
-            score += 2
-        else:
-            score -= 2
-
-        if mom > 0:
-            score += 1
-        else:
-            score -= 1
+        th = threshold(vol)
 
         price = df["close"].iloc[i]
 
-        if score >= 4 and position == 0:
+        if prob > th and position == 0:
             position = 1
             entry = price
 
-        elif score <= -4 and position == 1:
-            balance *= price / entry
+        elif prob < (1 - th) and position == 1:
+            balance *= (price / entry) * (1 - fee)
             position = 0
 
     return balance
@@ -210,40 +188,29 @@ def equity_curve(df):
     curve = []
     position = 0
     entry = 0
+    fee = 0.001
 
-    for i in range(20, len(df)):
+    for i in range(30, len(df)):
 
         window = df["close"].iloc[:i]
 
         rsi_v = rsi(window)
         macd_v, signal_v = macd(window)
         mom = momentum(df.iloc[:i])
+        vol = volatility(window)
 
-        score = 0
+        prob, _ = ml_score(rsi_v, macd_v, signal_v, mom, vol)
 
-        if rsi_v < 30:
-            score += 2
-        elif rsi_v > 70:
-            score -= 2
-
-        if macd_v > signal_v:
-            score += 2
-        else:
-            score -= 2
-
-        if mom > 0:
-            score += 1
-        else:
-            score -= 1
+        th = threshold(vol)
 
         price = df["close"].iloc[i]
 
-        if score >= 4 and position == 0:
+        if prob > th and position == 0:
             position = 1
             entry = price
 
-        elif score <= -4 and position == 1:
-            balance *= price / entry
+        elif prob < (1 - th) and position == 1:
+            balance *= (price / entry) * (1 - fee)
             position = 0
 
         curve.append(balance)
@@ -251,7 +218,7 @@ def equity_curve(df):
     return curve
 
 # =====================================================
-# RUN
+# LOAD DATA
 # =====================================================
 
 df = get_data()
@@ -262,13 +229,28 @@ if df is None:
 
 price = get_price(df)
 
+# =====================================================
+# FEATURES
+# =====================================================
+
 rsi_v = rsi(df["close"])
 macd_v, signal_v = macd(df["close"])
 mom = momentum(df)
+vol = volatility(df["close"])
 
-decision, reasons, score = ai(rsi_v, macd_v, signal_v, mom)
+prob, raw = ml_score(rsi_v, macd_v, signal_v, mom, vol)
+th = threshold(vol)
 
-save_signal(price, rsi_v, macd_v, signal_v, mom, decision, score)
+decision = "🟢 BUY" if prob > th else "🔴 SELL/WAIT"
+
+# =====================================================
+# SAVE TO DB
+# =====================================================
+
+save_signal((
+    price, rsi_v, macd_v, signal_v,
+    mom, vol, prob, decision, raw
+))
 
 # =====================================================
 # UI
@@ -280,20 +262,17 @@ with col1:
     st.metric("BTC", f"${price:,.2f}")
 
 with col2:
-    st.metric("RSI", f"{rsi_v:.2f}")
+    st.metric("Probability", f"{prob:.2f}")
 
 with col3:
-    st.metric("Momentum", f"{mom:.2f}%")
+    st.metric("Volatility", f"{vol:.2f}%")
 
-st.markdown(f"# 🧠 {decision}")
-st.write(f"Score: {score}")
+st.markdown(f"# 🧠 ML Decision: {decision}")
 
-st.write("## 📋 Reasons")
-for r in reasons:
-    st.write("•", r)
+st.write(f"Threshold: {th:.2f}")
 
 # =====================================================
-# ANALYTICS
+# PERFORMANCE
 # =====================================================
 
 st.write("## 📊 Performance")
@@ -302,13 +281,14 @@ cursor.execute("SELECT * FROM signals ORDER BY id DESC LIMIT 50")
 rows = cursor.fetchall()
 
 log_df = pd.DataFrame(rows, columns=[
-    "id","time","price","rsi","macd","signal","momentum","decision","score"
+    "id","time","price","rsi","macd","signal",
+    "momentum","volatility","probability","decision","score"
 ])
 
 st.dataframe(log_df)
 
-wins = len(log_df[log_df["score"] > 2])
-losses = len(log_df[log_df["score"] < -2])
+wins = len(log_df[log_df["probability"] > 0.6])
+losses = len(log_df[log_df["probability"] <= 0.6])
 
 col1, col2 = st.columns(2)
 
@@ -319,22 +299,18 @@ with col2:
     st.metric("Losses", losses)
 
 # =====================================================
-# BACKTEST SECTION
+# BACKTEST
 # =====================================================
 
-st.write("## 📈 Backtest Results")
+st.write("## 📈 Backtest")
 
 bt = backtest(df)
 bh = buy_hold(df)
 
-st.write(f"Strategy: ${bt:.2f}")
+st.write(f"ML Strategy: ${bt:.2f}")
 st.write(f"Buy & Hold: ${bh:.2f}")
 
 st.write("## 📊 Equity Curve")
 st.line_chart(equity_curve(df))
 
-# =====================================================
-# END
-# =====================================================
-
-st.caption("ZST LEVEL 2 PRO SaaS")
+st.caption("ZST LEVEL 3 PRO ML SaaS")
