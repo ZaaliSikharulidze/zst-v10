@@ -29,11 +29,26 @@ conn.commit()
 # =========================
 # PRICE
 # =========================
-price = float(
-    requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT").json()["price"]
-)
+import requests
+import streamlit as st
 
-st.metric("BTC Price", f"${price:,.2f}")
+try:
+    response = requests.get(
+        "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+        timeout=5
+    )
+    data = response.json()
+
+    price = float(data["price"])
+
+    st.metric("BTC Price", f"${price:,.2f}")
+
+except Exception as e:
+    st.error("BTC price loading error 😕")
+    st.write("Using fallback value")
+
+    price = 0
+    st.metric("BTC Price", "$0.00")
 
 # =========================
 # DATA
