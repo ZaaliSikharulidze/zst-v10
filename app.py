@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 import numpy as np
+import sqlite3
 
-st.set_page_config(page_title="ZST V10 Stable", layout="wide")
+st.set_page_config(page_title="ZST PRO SaaS", layout="wide")
 
-st.title("🚀 ZST V10 - Stable Trading System (Cloud Safe)")
+st.title("🚀 ZST LEVEL 2 PRO SAAS")
 
 # =====================================================
 # AUTO REFRESH
@@ -18,25 +19,53 @@ except:
     pass
 
 # =====================================================
-# DATA FROM COINGECKO ONLY
+# DATABASE
+# =====================================================
+
+conn = sqlite3.connect("zst.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    price REAL,
+    rsi REAL,
+    macd REAL,
+    signal REAL,
+    momentum REAL,
+    decision TEXT,
+    score REAL
+)
+""")
+
+conn.commit()
+
+def save_signal(price, rsi, macd, signal, momentum, decision, score):
+    cursor.execute("""
+        INSERT INTO signals (
+            price, rsi, macd, signal, momentum, decision, score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (price, rsi, macd, signal, momentum, decision, score))
+    conn.commit()
+
+# =====================================================
+# DATA (COINGECKO ONLY)
 # =====================================================
 
 @st.cache_data(ttl=30)
 def get_data():
 
-    try:
-        url = (
-            "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
-            "?vs_currency=usd&days=1"
-        )
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1"
 
+    try:
         r = requests.get(url, timeout=10)
         data = r.json()
 
         if not data or len(data) < 20:
             return None
 
-        df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close"])
+        df = pd.DataFrame(data, columns=["time","open","high","low","close"])
         df["close"] = df["close"].astype(float)
 
         return df
@@ -44,24 +73,15 @@ def get_data():
     except:
         return None
 
-# =====================================================
-# PRICE
-# =====================================================
-
 def get_price(df):
-    try:
-        return float(df["close"].iloc[-1])
-    except:
-        return None
+    return float(df["close"].iloc[-1])
 
 # =====================================================
-# RSI
+# INDICATORS
 # =====================================================
 
 def rsi(series, period=14):
-
     delta = series.diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -69,29 +89,15 @@ def rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
-
     rsi_series = 100 - (100 / (1 + rs))
 
     last = rsi_series.dropna()
-
-    if len(last) == 0:
-        return 50
-
-    return float(last.iloc[-1])
-
-# =====================================================
-# EMA
-# =====================================================
+    return float(last.iloc[-1]) if len(last) else 50
 
 def ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
-# =====================================================
-# MACD
-# =====================================================
-
 def macd(series):
-
     ema12 = ema(series, 12)
     ema26 = ema(series, 26)
 
@@ -100,46 +106,35 @@ def macd(series):
 
     return macd_line.iloc[-1], signal.iloc[-1]
 
-# =====================================================
-# MOMENTUM
-# =====================================================
-
 def momentum(df):
-
     if len(df) < 20:
         return 0
-
-    first = df["close"].iloc[-20]
-    last = df["close"].iloc[-1]
-
-    return ((last - first) / first) * 100
+    return ((df["close"].iloc[-1] - df["close"].iloc[-20]) / df["close"].iloc[-20]) * 100
 
 # =====================================================
-# AI BRAIN
+# AI LOGIC
 # =====================================================
 
-def ai_brain(rsi_value, macd_value, signal, momentum_value):
+def ai(rsi_v, macd_v, signal_v, mom):
 
     score = 0
     reasons = []
 
-    if rsi_value < 30:
+    if rsi_v < 30:
         score += 2
         reasons.append("RSI oversold")
-    elif rsi_value > 70:
+    elif rsi_v > 70:
         score -= 2
         reasons.append("RSI overbought")
-    else:
-        reasons.append("RSI neutral")
 
-    if macd_value > signal:
+    if macd_v > signal_v:
         score += 2
         reasons.append("MACD bullish")
     else:
         score -= 2
         reasons.append("MACD bearish")
 
-    if momentum_value > 0:
+    if mom > 0:
         score += 1
         reasons.append("Positive momentum")
     else:
@@ -160,36 +155,120 @@ def ai_brain(rsi_value, macd_value, signal, momentum_value):
     return decision, reasons, score
 
 # =====================================================
-# LOAD DATA
+# BACKTEST
 # =====================================================
 
-with st.spinner("Loading market data..."):
-    df = get_data()
+def backtest(df):
+
+    balance = 1000
+    position = 0
+    entry = 0
+
+    for i in range(20, len(df)):
+
+        window = df["close"].iloc[:i]
+
+        rsi_v = rsi(window)
+        macd_v, signal_v = macd(window)
+        mom = momentum(df.iloc[:i])
+
+        score = 0
+
+        if rsi_v < 30:
+            score += 2
+        elif rsi_v > 70:
+            score -= 2
+
+        if macd_v > signal_v:
+            score += 2
+        else:
+            score -= 2
+
+        if mom > 0:
+            score += 1
+        else:
+            score -= 1
+
+        price = df["close"].iloc[i]
+
+        if score >= 4 and position == 0:
+            position = 1
+            entry = price
+
+        elif score <= -4 and position == 1:
+            balance *= price / entry
+            position = 0
+
+    return balance
+
+def buy_hold(df):
+    return 1000 * (df["close"].iloc[-1] / df["close"].iloc[0])
+
+def equity_curve(df):
+
+    balance = 1000
+    curve = []
+    position = 0
+    entry = 0
+
+    for i in range(20, len(df)):
+
+        window = df["close"].iloc[:i]
+
+        rsi_v = rsi(window)
+        macd_v, signal_v = macd(window)
+        mom = momentum(df.iloc[:i])
+
+        score = 0
+
+        if rsi_v < 30:
+            score += 2
+        elif rsi_v > 70:
+            score -= 2
+
+        if macd_v > signal_v:
+            score += 2
+        else:
+            score -= 2
+
+        if mom > 0:
+            score += 1
+        else:
+            score -= 1
+
+        price = df["close"].iloc[i]
+
+        if score >= 4 and position == 0:
+            position = 1
+            entry = price
+
+        elif score <= -4 and position == 1:
+            balance *= price / entry
+            position = 0
+
+        curve.append(balance)
+
+    return curve
 
 # =====================================================
-# FAIL SAFE
+# RUN
 # =====================================================
+
+df = get_data()
 
 if df is None:
-    st.error("❌ Market data unavailable (CoinGecko issue)")
+    st.error("Market data unavailable")
     st.stop()
 
 price = get_price(df)
 
-# =====================================================
-# CALCULATIONS
-# =====================================================
+rsi_v = rsi(df["close"])
+macd_v, signal_v = macd(df["close"])
+mom = momentum(df)
 
-rsi_value = rsi(df["close"])
-macd_value, signal = macd(df["close"])
-momentum_value = momentum(df)
+decision, reasons, score = ai(rsi_v, macd_v, signal_v, mom)
 
-decision, reasons, score = ai_brain(
-    rsi_value,
-    macd_value,
-    signal,
-    momentum_value
-)
+save_signal(price, rsi_v, macd_v, signal_v, mom, decision, score)
 
 # =====================================================
 # UI
@@ -198,39 +277,64 @@ decision, reasons, score = ai_brain(
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric("BTC Price", f"${price:,.2f}")
+    st.metric("BTC", f"${price:,.2f}")
 
 with col2:
-    st.metric("RSI", f"{rsi_value:.2f}")
+    st.metric("RSI", f"{rsi_v:.2f}")
 
 with col3:
-    st.metric("Momentum", f"{momentum_value:.2f}%")
+    st.metric("Momentum", f"{mom:.2f}%")
 
-st.markdown(f"# 🧠 AI Decision: {decision}")
-st.write(f"AI Score: {score}")
+st.markdown(f"# 🧠 {decision}")
+st.write(f"Score: {score}")
 
-st.write("## 📋 Analysis")
-
+st.write("## 📋 Reasons")
 for r in reasons:
     st.write("•", r)
 
 # =====================================================
-# CHART
+# ANALYTICS
 # =====================================================
 
-chart_df = pd.DataFrame({
-    "BTC": df["close"],
-    "EMA20": ema(df["close"], 20),
-    "EMA50": ema(df["close"], 50)
-})
+st.write("## 📊 Performance")
 
-st.line_chart(chart_df)
+cursor.execute("SELECT * FROM signals ORDER BY id DESC LIMIT 50")
+rows = cursor.fetchall()
+
+log_df = pd.DataFrame(rows, columns=[
+    "id","time","price","rsi","macd","signal","momentum","decision","score"
+])
+
+st.dataframe(log_df)
+
+wins = len(log_df[log_df["score"] > 2])
+losses = len(log_df[log_df["score"] < -2])
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric("Wins", wins)
+
+with col2:
+    st.metric("Losses", losses)
 
 # =====================================================
-# RAW DATA
+# BACKTEST SECTION
 # =====================================================
 
-with st.expander("📦 Raw Data"):
-    st.dataframe(df.tail(20))
+st.write("## 📈 Backtest Results")
 
-st.caption("ZST V10 - Fully Stable Cloud Version (No yfinance)")
+bt = backtest(df)
+bh = buy_hold(df)
+
+st.write(f"Strategy: ${bt:.2f}")
+st.write(f"Buy & Hold: ${bh:.2f}")
+
+st.write("## 📊 Equity Curve")
+st.line_chart(equity_curve(df))
+
+# =====================================================
+# END
+# =====================================================
+
+st.caption("ZST LEVEL 2 PRO SaaS")
