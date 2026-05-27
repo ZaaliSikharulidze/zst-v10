@@ -70,19 +70,19 @@ df_5m = get_data("5m")
 # RSI FUNCTION
 # =========================
 def rsi_calc(df):
-    delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    try:
+        if df is None or len(df) < 15:
+            return 0
 
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
+        rsi = df["close"].rolling(14).mean()
 
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return float(rsi.iloc[-1])
+        if rsi is None or len(rsi) == 0:
+            return 0
 
-rsi_1m = rsi_calc(df_1m)
-rsi_5m = rsi_calc(df_5m)
+        return float(rsi.iloc[-1])
+
+    except:
+        return 0
 
 # =========================
 # VOLATILITY
