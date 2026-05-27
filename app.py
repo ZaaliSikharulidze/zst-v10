@@ -20,6 +20,7 @@ def safe_get(url):
 
 def get_btc_price():
     data = safe_get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+
     try:
         if data and "price" in data:
             return float(data["price"])
@@ -132,7 +133,7 @@ def confidence_calc(rsi, vol):
 
 
 # =========================
-# UI
+# STREAMLIT UI
 # =========================
 
 st.set_page_config(page_title="ZST v1 REAL", layout="wide")
@@ -176,6 +177,3 @@ st.subheader("Market Chart (1m)")
 st.line_chart(df["close"])
 
 st.caption("ZST v1 - Real-Time Binance Powered System")
-st.line_chart(df["close"])
-
-st.caption("ZST v1 - Production Safe Real-Time System")-time Binance powered system")
