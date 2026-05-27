@@ -20,7 +20,6 @@ def safe_get(url):
 
 def get_btc_price():
     data = safe_get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
-
     try:
         if data and "price" in data:
             return float(data["price"])
@@ -30,7 +29,7 @@ def get_btc_price():
 
 
 # =========================
-# MARKET DATA (KLINES)
+# KLINES (REAL DATA)
 # =========================
 
 def get_klines(symbol="BTCUSDT", interval="1m", limit=100):
@@ -40,7 +39,6 @@ def get_klines(symbol="BTCUSDT", interval="1m", limit=100):
         r = requests.get(url, timeout=5)
         data = r.json()
 
-        # Binance validation
         if not isinstance(data, list):
             return None
 
@@ -62,7 +60,7 @@ def get_klines(symbol="BTCUSDT", interval="1m", limit=100):
 
 
 # =========================
-# INDICATORS
+# RSI CALC
 # =========================
 
 def rsi_calc(df):
@@ -88,6 +86,10 @@ def rsi_calc(df):
     except:
         return 50
 
+
+# =========================
+# VOLATILITY
+# =========================
 
 def volatility_calc(df):
     try:
@@ -130,7 +132,7 @@ def confidence_calc(rsi, vol):
 
 
 # =========================
-# STREAMLIT UI
+# UI
 # =========================
 
 st.set_page_config(page_title="ZST v1 REAL", layout="wide")
@@ -143,7 +145,7 @@ df = get_klines()
 
 # SAFETY CHECK
 if df is None or len(df) == 0:
-    st.error("❌ No market data (Binance blocked or API issue)")
+    st.error("❌ No market data (Binance API unavailable)")
     st.stop()
 
 # INDICATORS
@@ -152,7 +154,7 @@ volatility = volatility_calc(df)
 signal = generate_signal(rsi)
 confidence = confidence_calc(rsi, volatility)
 
-# UI
+# DASHBOARD
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
@@ -171,6 +173,9 @@ st.subheader("Signal")
 st.markdown(f"## {signal}")
 
 st.subheader("Market Chart (1m)")
+st.line_chart(df["close"])
+
+st.caption("ZST v1 - Real-Time Binance Powered System")
 st.line_chart(df["close"])
 
 st.caption("ZST v1 - Production Safe Real-Time System")-time Binance powered system")
