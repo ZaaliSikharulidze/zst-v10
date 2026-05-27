@@ -11,27 +11,54 @@ def safe_get(url):
         r = requests.get(url, timeout=5)
         return r.json()
     except:
-        return {}
+        return None
+
+
+# =========================
+# PRICE
+# =========================
 
 def get_btc_price():
     data = safe_get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
-    return float(data.get("price", 0))
 
+    try:
+        if data and "price" in data:
+            return float(data["price"])
+        return 0
+    except:
+        return 0
+
+
+# =========================
+# MARKET DATA (KLINES)
+# =========================
 
 def get_klines(symbol="BTCUSDT", interval="1m", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    data = safe_get(url)
 
-    if not data:
-        return pd.DataFrame({"close": []})
+    try:
+        r = requests.get(url, timeout=5)
+        data = r.json()
 
-    df = pd.DataFrame(data, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "qav", "trades", "tbbav", "tbqav", "ignore"
-    ])
+        # Binance validation
+        if not isinstance(data, list):
+            return None
 
-    df["close"] = df["close"].astype(float)
-    return df
+        df = pd.DataFrame(data, columns=[
+            "open_time", "open", "high", "low", "close", "volume",
+            "close_time", "qav", "trades", "tbbav", "tbqav", "ignore"
+        ])
+
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna()
+
+        if len(df) == 0:
+            return None
+
+        return df
+
+    except:
+        return None
 
 
 # =========================
@@ -44,8 +71,9 @@ def rsi_calc(df):
             return 50
 
         delta = df["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+
+        gain = delta.where(delta > 0, 0).rolling(14).mean()
+        loss = -delta.where(delta < 0, 0).rolling(14).mean()
 
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
@@ -68,18 +96,35 @@ def volatility_calc(df):
         return 0
 
 
+# =========================
+# SIGNAL ENGINE
+# =========================
+
 def generate_signal(rsi):
-    if rsi > 70:
-        return "⛔ SELL"
-    elif rsi < 30:
-        return "🟢 BUY"
-    else:
+    try:
+        if rsi > 70:
+            return "⛔ SELL"
+        elif rsi < 30:
+            return "🟢 BUY"
+        else:
+            return "⚪ WAIT"
+    except:
         return "⚪ WAIT"
 
 
+# =========================
+# CONFIDENCE ENGINE
+# =========================
+
 def confidence_calc(rsi, vol):
     try:
-        return max(0, 100 - (abs(50 - rsi) * 1.5 + vol / 5))
+        rsi = float(rsi) if isinstance(rsi, (int, float)) else 50
+        vol = float(vol) if isinstance(vol, (int, float)) else 0
+
+        confidence = 100 - (abs(50 - rsi) * 1.5 + vol / 5)
+
+        return max(0, min(100, confidence))
+
     except:
         return 0
 
@@ -88,22 +133,22 @@ def confidence_calc(rsi, vol):
 # STREAMLIT UI
 # =========================
 
-st.set_page_config(page_title="ZST v1 REAL TIME", layout="wide")
+st.set_page_config(page_title="ZST v1 REAL", layout="wide")
 
-st.title("🚀 ZST v1 - REAL TIME Trading Intelligence")
+st.title("🚀 ZST v1 - Real-Time Trading Intelligence")
 
 # DATA
 price = get_btc_price()
-df_1m = get_klines("BTCUSDT", "1m")
+df = get_klines()
 
 # SAFETY CHECK
-if df_1m.empty:
-    st.error("No market data")
+if df is None or len(df) == 0:
+    st.error("❌ No market data (Binance blocked or API issue)")
     st.stop()
 
 # INDICATORS
-rsi = rsi_calc(df_1m)
-volatility = volatility_calc(df_1m)
+rsi = rsi_calc(df)
+volatility = volatility_calc(df)
 signal = generate_signal(rsi)
 confidence = confidence_calc(rsi, volatility)
 
@@ -125,8 +170,7 @@ with col4:
 st.subheader("Signal")
 st.markdown(f"## {signal}")
 
-# CHART (REAL DATA)
 st.subheader("Market Chart (1m)")
-st.line_chart(df_1m["close"])
+st.line_chart(df["close"])
 
-st.caption("ZST v1 - Real-time Binance powered system")
+st.caption("ZST v1 - Production Safe Real-Time System")-time Binance powered system")
