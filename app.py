@@ -4,9 +4,11 @@ import requests
 import numpy as np
 import sqlite3
 
-st.set_page_config(page_title="ZST LEVEL 3 PRO ML", layout="wide")
+from sklearn.linear_model import LogisticRegression
 
-st.title("🚀 ZST LEVEL 3 PRO ML SAAS")
+st.set_page_config(page_title="ZST LEVEL 4 PRO ML", layout="wide")
+
+st.title("🚀 ZST LEVEL 4 PRO ML SYSTEM")
 
 # =====================================================
 # AUTO REFRESH
@@ -19,7 +21,7 @@ except:
     pass
 
 # =====================================================
-# DATABASE
+# DB
 # =====================================================
 
 conn = sqlite3.connect("zst.db", check_same_thread=False)
@@ -35,48 +37,40 @@ CREATE TABLE IF NOT EXISTS signals (
     signal REAL,
     momentum REAL,
     volatility REAL,
-    probability REAL,
-    decision TEXT,
-    score REAL
+    prob REAL,
+    decision TEXT
 )
 """)
 
 conn.commit()
 
-def save_signal(data):
+def save(price, rsi, macd, signal, mom, vol, prob, decision):
     cursor.execute("""
         INSERT INTO signals (
-            price, rsi, macd, signal, momentum,
-            volatility, probability, decision, score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, data)
+            price, rsi, macd, signal,
+            momentum, volatility, prob, decision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (price, rsi, macd, signal, mom, vol, prob, decision))
     conn.commit()
 
 # =====================================================
-# DATA (COINGECKO)
+# DATA
 # =====================================================
 
 @st.cache_data(ttl=30)
 def get_data():
 
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1"
-
     r = requests.get(url, timeout=10)
     data = r.json()
 
-    if not data or len(data) < 30:
-        return None
-
-    df = pd.DataFrame(data, columns=["time","open","high","low","close"])
-    df["close"] = df["close"].astype(float)
+    df = pd.DataFrame(data, columns=["t","o","h","l","c"])
+    df["c"] = df["c"].astype(float)
 
     return df
 
-def get_price(df):
-    return float(df["close"].iloc[-1])
-
 # =====================================================
-# INDICATORS
+# FEATURES
 # =====================================================
 
 def rsi(series, period=14):
@@ -88,134 +82,56 @@ def rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi_series = 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
 
-    return float(rsi_series.dropna().iloc[-1]) if len(rsi_series.dropna()) else 50
+    return float(rsi.dropna().iloc[-1]) if len(rsi.dropna()) else 50
 
-def ema(series, period):
-    return series.ewm(span=period, adjust=False).mean()
+def ema(s, p):
+    return s.ewm(span=p).mean()
 
-def macd(series):
-    macd_line = ema(series, 12) - ema(series, 26)
-    signal = ema(macd_line, 9)
-    return macd_line.iloc[-1], signal.iloc[-1]
+def macd(s):
+    m = ema(s, 12) - ema(s, 26)
+    sig = ema(m, 9)
+    return float(m.iloc[-1]), float(sig.iloc[-1])
 
 def momentum(df):
-    if len(df) < 20:
-        return 0
-    return ((df["close"].iloc[-1] - df["close"].iloc[-20]) / df["close"].iloc[-20]) * 100
+    return ((df["c"].iloc[-1] - df["c"].iloc[-20]) / df["c"].iloc[-20]) * 100
 
-def volatility(series):
-    return float(series.pct_change().std() * 100)
+def volatility(s):
+    return float(s.pct_change().std() * 100)
 
 # =====================================================
-# ML-LIKE PROBABILITY MODEL (NO LIBRARY VERSION)
+# ML MODEL
 # =====================================================
 
-def ml_score(rsi_v, macd_v, signal_v, mom, vol):
+def train_model(X, y):
+    model = LogisticRegression()
+    model.fit(X, y)
+    return model
 
-    # normalize features
-    rsi_score = (50 - rsi_v) / 50
-    macd_score = 1 if macd_v > signal_v else -1
-    mom_score = np.tanh(mom / 5)
-    vol_penalty = -vol / 10
+def create_dataset(df):
 
-    raw = (
-        rsi_score * 0.35 +
-        macd_score * 0.35 +
-        mom_score * 0.2 +
-        vol_penalty * 0.1
-    )
-
-    # sigmoid → probability
-    prob = 1 / (1 + np.exp(-raw))
-
-    return float(prob), float(raw)
-
-# =====================================================
-# DYNAMIC THRESHOLD
-# =====================================================
-
-def threshold(vol):
-    if vol > 2:
-        return 0.65
-    elif vol > 1:
-        return 0.6
-    return 0.55
-
-# =====================================================
-# BACKTEST (ML VERSION)
-# =====================================================
-
-def backtest(df):
-
-    balance = 1000
-    position = 0
-    entry = 0
-    fee = 0.001
+    X = []
+    y = []
 
     for i in range(30, len(df)):
 
-        window = df["close"].iloc[:i]
+        window = df["c"].iloc[:i]
 
-        rsi_v = rsi(window)
-        macd_v, signal_v = macd(window)
+        r = rsi(window)
+        m, s = macd(window)
         mom = momentum(df.iloc[:i])
         vol = volatility(window)
 
-        prob, _ = ml_score(rsi_v, macd_v, signal_v, mom, vol)
+        features = [r, m, s, mom, vol]
 
-        th = threshold(vol)
+        # pseudo label (future return)
+        future = df["c"].iloc[i] > df["c"].iloc[i-1]
 
-        price = df["close"].iloc[i]
+        X.append(features)
+        y.append(1 if future else 0)
 
-        if prob > th and position == 0:
-            position = 1
-            entry = price
-
-        elif prob < (1 - th) and position == 1:
-            balance *= (price / entry) * (1 - fee)
-            position = 0
-
-    return balance
-
-def buy_hold(df):
-    return 1000 * (df["close"].iloc[-1] / df["close"].iloc[0])
-
-def equity_curve(df):
-
-    balance = 1000
-    curve = []
-    position = 0
-    entry = 0
-    fee = 0.001
-
-    for i in range(30, len(df)):
-
-        window = df["close"].iloc[:i]
-
-        rsi_v = rsi(window)
-        macd_v, signal_v = macd(window)
-        mom = momentum(df.iloc[:i])
-        vol = volatility(window)
-
-        prob, _ = ml_score(rsi_v, macd_v, signal_v, mom, vol)
-
-        th = threshold(vol)
-
-        price = df["close"].iloc[i]
-
-        if prob > th and position == 0:
-            position = 1
-            entry = price
-
-        elif prob < (1 - th) and position == 1:
-            balance *= (price / entry) * (1 - fee)
-            position = 0
-
-        curve.append(balance)
-
-    return curve
+    return np.array(X), np.array(y)
 
 # =====================================================
 # LOAD DATA
@@ -223,34 +139,45 @@ def equity_curve(df):
 
 df = get_data()
 
-if df is None:
-    st.error("Market data unavailable")
-    st.stop()
-
-price = get_price(df)
+price = df["c"].iloc[-1]
 
 # =====================================================
-# FEATURES
+# FEATURES (LIVE)
 # =====================================================
 
-rsi_v = rsi(df["close"])
-macd_v, signal_v = macd(df["close"])
+r = rsi(df["c"])
+m, s = macd(df["c"])
 mom = momentum(df)
-vol = volatility(df["close"])
-
-prob, raw = ml_score(rsi_v, macd_v, signal_v, mom, vol)
-th = threshold(vol)
-
-decision = "🟢 BUY" if prob > th else "🔴 SELL/WAIT"
+vol = volatility(df["c"])
 
 # =====================================================
-# SAVE TO DB
+# TRAIN ML MODEL (rolling)
 # =====================================================
 
-save_signal((
-    price, rsi_v, macd_v, signal_v,
-    mom, vol, prob, decision, raw
-))
+X, y = create_dataset(df)
+
+model = train_model(X, y)
+
+live_features = np.array([[r, m, s, mom, vol]])
+
+prob = model.predict_proba(live_features)[0][1]
+
+# =====================================================
+# DECISION
+# =====================================================
+
+if prob > 0.6:
+    decision = "🟢 BUY"
+elif prob < 0.4:
+    decision = "🔴 SELL"
+else:
+    decision = "⚪ HOLD"
+
+# =====================================================
+# SAVE
+# =====================================================
+
+save(price, r, m, s, mom, vol, prob, decision)
 
 # =====================================================
 # UI
@@ -262,33 +189,45 @@ with col1:
     st.metric("BTC", f"${price:,.2f}")
 
 with col2:
-    st.metric("Probability", f"{prob:.2f}")
+    st.metric("ML Probability", f"{prob:.2f}")
 
 with col3:
     st.metric("Volatility", f"{vol:.2f}%")
 
 st.markdown(f"# 🧠 ML Decision: {decision}")
 
-st.write(f"Threshold: {th:.2f}")
+st.write("## 📊 Live Features")
+st.write({
+    "RSI": r,
+    "MACD": m,
+    "Signal": s,
+    "Momentum": mom,
+    "Volatility": vol
+})
 
 # =====================================================
-# PERFORMANCE
+# LOGS
 # =====================================================
-
-st.write("## 📊 Performance")
 
 cursor.execute("SELECT * FROM signals ORDER BY id DESC LIMIT 50")
 rows = cursor.fetchall()
 
 log_df = pd.DataFrame(rows, columns=[
     "id","time","price","rsi","macd","signal",
-    "momentum","volatility","probability","decision","score"
+    "momentum","volatility","prob","decision"
 ])
 
+st.write("## 📈 Signal History")
 st.dataframe(log_df)
 
-wins = len(log_df[log_df["probability"] > 0.6])
-losses = len(log_df[log_df["probability"] <= 0.6])
+# =====================================================
+# SIMPLE BACKTEST
+# =====================================================
+
+st.write("## 📊 Quick Performance")
+
+wins = len(log_df[log_df["prob"] > 0.6])
+losses = len(log_df[log_df["prob"] <= 0.6])
 
 col1, col2 = st.columns(2)
 
@@ -298,19 +237,4 @@ with col1:
 with col2:
     st.metric("Losses", losses)
 
-# =====================================================
-# BACKTEST
-# =====================================================
-
-st.write("## 📈 Backtest")
-
-bt = backtest(df)
-bh = buy_hold(df)
-
-st.write(f"ML Strategy: ${bt:.2f}")
-st.write(f"Buy & Hold: ${bh:.2f}")
-
-st.write("## 📊 Equity Curve")
-st.line_chart(equity_curve(df))
-
-st.caption("ZST LEVEL 3 PRO ML SaaS")
+st.caption("ZST LEVEL 4 PRO ML SYSTEM")
