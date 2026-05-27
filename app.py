@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
-import requests
 import numpy as np
+import requests
 import sqlite3
 
 from sklearn.linear_model import LogisticRegression
 
-st.set_page_config(page_title="ZST LEVEL 4 PRO ML", layout="wide")
+st.set_page_config(page_title="ZST LEVEL 4 PRO FIXED", layout="wide")
 
-st.title("🚀 ZST LEVEL 4 PRO ML SYSTEM")
+st.title("🚀 ZST LEVEL 4 PRO ML (FIXED STABLE VERSION)")
 
 # =====================================================
 # AUTO REFRESH
@@ -21,7 +21,7 @@ except:
     pass
 
 # =====================================================
-# DB
+# DB (SAFE RESET-FREE VERSION)
 # =====================================================
 
 conn = sqlite3.connect("zst.db", check_same_thread=False)
@@ -45,24 +45,33 @@ CREATE TABLE IF NOT EXISTS signals (
 conn.commit()
 
 def save(price, rsi, macd, signal, mom, vol, prob, decision):
+
     cursor.execute("""
         INSERT INTO signals (
             price, rsi, macd, signal,
             momentum, volatility, prob, decision
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (price, rsi, macd, signal, mom, vol, prob, decision))
+    """, (
+        price, rsi, macd, signal,
+        mom, vol, prob, decision
+    ))
+
     conn.commit()
 
 # =====================================================
-# DATA
+# DATA (COINGECKO)
 # =====================================================
 
 @st.cache_data(ttl=30)
 def get_data():
 
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1"
+
     r = requests.get(url, timeout=10)
     data = r.json()
+
+    if not data or len(data) < 30:
+        return None
 
     df = pd.DataFrame(data, columns=["t","o","h","l","c"])
     df["c"] = df["c"].astype(float)
@@ -70,7 +79,7 @@ def get_data():
     return df
 
 # =====================================================
-# FEATURES
+# INDICATORS
 # =====================================================
 
 def rsi(series, period=14):
@@ -82,12 +91,12 @@ def rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
+    rsi_val = 100 - (100 / (1 + rs))
 
-    return float(rsi.dropna().iloc[-1]) if len(rsi.dropna()) else 50
+    return float(rsi_val.dropna().iloc[-1]) if len(rsi_val.dropna()) else 50
 
 def ema(s, p):
-    return s.ewm(span=p).mean()
+    return s.ewm(span=p, adjust=False).mean()
 
 def macd(s):
     m = ema(s, 12) - ema(s, 26)
@@ -95,10 +104,12 @@ def macd(s):
     return float(m.iloc[-1]), float(sig.iloc[-1])
 
 def momentum(df):
+    if len(df) < 20:
+        return 0
     return ((df["c"].iloc[-1] - df["c"].iloc[-20]) / df["c"].iloc[-20]) * 100
 
-def volatility(s):
-    return float(s.pct_change().std() * 100)
+def volatility(series):
+    return float(series.pct_change().std() * 100)
 
 # =====================================================
 # ML MODEL
@@ -111,8 +122,7 @@ def train_model(X, y):
 
 def create_dataset(df):
 
-    X = []
-    y = []
+    X, y = [], []
 
     for i in range(30, len(df)):
 
@@ -123,12 +133,9 @@ def create_dataset(df):
         mom = momentum(df.iloc[:i])
         vol = volatility(window)
 
-        features = [r, m, s, mom, vol]
+        X.append([r, m, s, mom, vol])
 
-        # pseudo label (future return)
         future = df["c"].iloc[i] > df["c"].iloc[i-1]
-
-        X.append(features)
         y.append(1 if future else 0)
 
     return np.array(X), np.array(y)
@@ -139,10 +146,14 @@ def create_dataset(df):
 
 df = get_data()
 
+if df is None:
+    st.error("Market data unavailable")
+    st.stop()
+
 price = df["c"].iloc[-1]
 
 # =====================================================
-# FEATURES (LIVE)
+# LIVE FEATURES
 # =====================================================
 
 r = rsi(df["c"])
@@ -151,16 +162,14 @@ mom = momentum(df)
 vol = volatility(df["c"])
 
 # =====================================================
-# TRAIN ML MODEL (rolling)
+# TRAIN ML
 # =====================================================
 
 X, y = create_dataset(df)
 
 model = train_model(X, y)
 
-live_features = np.array([[r, m, s, mom, vol]])
-
-prob = model.predict_proba(live_features)[0][1]
+prob = model.predict_proba([[r, m, s, mom, vol]])[0][1]
 
 # =====================================================
 # DECISION
@@ -174,7 +183,7 @@ else:
     decision = "⚪ HOLD"
 
 # =====================================================
-# SAVE
+# SAVE TO DB
 # =====================================================
 
 save(price, r, m, s, mom, vol, prob, decision)
@@ -194,9 +203,10 @@ with col2:
 with col3:
     st.metric("Volatility", f"{vol:.2f}%")
 
-st.markdown(f"# 🧠 ML Decision: {decision}")
+st.markdown(f"# 🧠 Decision: {decision}")
 
-st.write("## 📊 Live Features")
+st.write("## 📊 Live Indicators")
+
 st.write({
     "RSI": r,
     "MACD": m,
@@ -221,10 +231,8 @@ st.write("## 📈 Signal History")
 st.dataframe(log_df)
 
 # =====================================================
-# SIMPLE BACKTEST
+# PERFORMANCE
 # =====================================================
-
-st.write("## 📊 Quick Performance")
 
 wins = len(log_df[log_df["prob"] > 0.6])
 losses = len(log_df[log_df["prob"] <= 0.6])
@@ -237,4 +245,4 @@ with col1:
 with col2:
     st.metric("Losses", losses)
 
-st.caption("ZST LEVEL 4 PRO ML SYSTEM")
+st.caption("ZST LEVEL 4 PRO ML - FIXED STABLE VERSION")
