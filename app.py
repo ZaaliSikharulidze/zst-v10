@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 # =========================
-# SAFE DATA LAYER
+# SAFE API LAYER
 # =========================
 
 def safe_get(url):
@@ -15,23 +15,27 @@ def safe_get(url):
 
 def get_btc_price():
     data = safe_get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
-    try:
-        return float(data.get("price", 0))
-    except:
-        return 0
+    return float(data.get("price", 0))
+
+
+def get_klines(symbol="BTCUSDT", interval="1m", limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    data = safe_get(url)
+
+    if not data:
+        return pd.DataFrame({"close": []})
+
+    df = pd.DataFrame(data, columns=[
+        "open_time", "open", "high", "low", "close", "volume",
+        "close_time", "qav", "trades", "tbbav", "tbqav", "ignore"
+    ])
+
+    df["close"] = df["close"].astype(float)
+    return df
 
 
 # =========================
-# MOCK DATA (replace later with real candles)
-# =========================
-def get_mock_df():
-    return pd.DataFrame({
-        "close": [1] * 20
-    })
-
-
-# =========================
-# INDICATOR ENGINE
+# INDICATORS
 # =========================
 
 def rsi_calc(df):
@@ -39,7 +43,13 @@ def rsi_calc(df):
         if df is None or len(df) < 14:
             return 50
 
-        rsi = df["close"].rolling(14).mean()
+        delta = df["close"].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
         rsi = rsi.dropna()
 
         if len(rsi) == 0:
@@ -51,34 +61,25 @@ def rsi_calc(df):
         return 50
 
 
-# =========================
-# SIGNAL ENGINE
-# =========================
+def volatility_calc(df):
+    try:
+        return float(df["close"].pct_change().std() * 100)
+    except:
+        return 0
+
 
 def generate_signal(rsi):
-    try:
-        if rsi > 70:
-            return "⛔ SELL"
-        elif rsi < 30:
-            return "🟢 BUY"
-        else:
-            return "⚪ WAIT"
-    except:
+    if rsi > 70:
+        return "⛔ SELL"
+    elif rsi < 30:
+        return "🟢 BUY"
+    else:
         return "⚪ WAIT"
 
 
-# =========================
-# CONFIDENCE ENGINE
-# =========================
-
-def calculate_confidence(rsi, volatility=0):
+def confidence_calc(rsi, vol):
     try:
-        rsi = float(rsi) if isinstance(rsi, (int, float)) else 50
-        volatility = float(volatility) if isinstance(volatility, (int, float)) else 0
-
-        confidence = 100 - (abs(50 - rsi) * 1.5 + volatility / 5)
-
-        return max(0, min(100, confidence))
+        return max(0, 100 - (abs(50 - rsi) * 1.5 + vol / 5))
     except:
         return 0
 
@@ -87,34 +88,45 @@ def calculate_confidence(rsi, volatility=0):
 # STREAMLIT UI
 # =========================
 
-st.set_page_config(page_title="ZST v1", layout="wide")
+st.set_page_config(page_title="ZST v1 REAL TIME", layout="wide")
 
-st.title("🚀 ZST v1 - SaaS Trading Intelligence Platform")
+st.title("🚀 ZST v1 - REAL TIME Trading Intelligence")
 
 # DATA
 price = get_btc_price()
-df = get_mock_df()
+df_1m = get_klines("BTCUSDT", "1m")
 
-rsi = rsi_calc(df)
+# SAFETY CHECK
+if df_1m.empty:
+    st.error("No market data")
+    st.stop()
+
+# INDICATORS
+rsi = rsi_calc(df_1m)
+volatility = volatility_calc(df_1m)
 signal = generate_signal(rsi)
-confidence = calculate_confidence(rsi)
+confidence = confidence_calc(rsi, volatility)
 
 # UI
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.metric("BTC Price", f"${price:,.2f}")
 
 with col2:
-    st.metric("RSI", f"{rsi:.2f}")
+    st.metric("RSI (1m)", f"{rsi:.2f}")
 
 with col3:
+    st.metric("Volatility", f"{volatility:.2f}%")
+
+with col4:
     st.metric("Confidence", f"{confidence:.1f}%")
 
 st.subheader("Signal")
 st.markdown(f"## {signal}")
 
-st.caption("ZST v1 - stable production version")
-st.line_chart(df_5m["close"])
+# CHART (REAL DATA)
+st.subheader("Market Chart (1m)")
+st.line_chart(df_1m["close"])
 
-st.caption("ZST v10 - deployable SaaS trading intelligence system")
+st.caption("ZST v1 - Real-time Binance powered system")
