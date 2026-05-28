@@ -5,19 +5,9 @@ import requests
 import sqlite3
 import os
 
-# =====================================================
-# SAFE IMPORT (NO CRASH)
-# =====================================================
-
-try:
-    from sklearn.linear_model import LogisticRegression
-    SKLEARN_OK = True
-except:
-    SKLEARN_OK = False
-
 st.set_page_config(page_title="ZST NO CRASH SAAS", layout="wide")
 
-st.title("🚀 ZST NO CRASH ARCHITECTURE SAAS")
+st.title("🚀 ZST FINAL STABLE NO CRASH SYSTEM")
 
 # =====================================================
 # AUTO REFRESH
@@ -30,70 +20,36 @@ except:
     pass
 
 # =====================================================
-# SAFE DATABASE (AUTO RECOVERY)
+# SAFE DB (AUTO FIX)
 # =====================================================
 
 DB_PATH = "zst.db"
 
-def init_db():
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+cursor = conn.cursor()
 
-    try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    price REAL,
+    rsi REAL,
+    macd REAL,
+    signal REAL,
+    momentum REAL,
+    volatility REAL,
+    prob REAL,
+    decision TEXT
+)
+""")
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            price REAL,
-            rsi REAL,
-            macd REAL,
-            signal REAL,
-            momentum REAL,
-            volatility REAL,
-            prob REAL,
-            decision TEXT
-        )
-        """)
-
-        conn.commit()
-        return conn, cursor
-
-    except Exception as e:
-
-        if os.path.exists(DB_PATH):
-            os.remove(DB_PATH)
-
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-        CREATE TABLE signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            price REAL,
-            rsi REAL,
-            macd REAL,
-            signal REAL,
-            momentum REAL,
-            volatility REAL,
-            prob REAL,
-            decision TEXT
-        )
-        """)
-
-        conn.commit()
-        return conn, cursor
-
-
-conn, cursor = init_db()
+conn.commit()
 
 # =====================================================
 # SAFE SAVE
 # =====================================================
 
 def save_signal(data):
-
     try:
         cursor.execute("""
         INSERT INTO signals (
@@ -103,17 +59,15 @@ def save_signal(data):
         """, data)
 
         conn.commit()
-
     except:
         pass
 
 # =====================================================
-# DATA (COINGECKO SAFE)
+# DATA (SAFE API)
 # =====================================================
 
 @st.cache_data(ttl=30)
 def get_data():
-
     try:
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1"
         r = requests.get(url, timeout=10)
@@ -132,10 +86,10 @@ def get_data():
         return None
 
 # =====================================================
-# FEATURES (SAFE SIMPLE VERSION)
+# INDICATORS (SAFE)
 # =====================================================
 
-def safe_rsi(series):
+def rsi(series):
     try:
         delta = series.diff()
         gain = delta.clip(lower=0)
@@ -164,19 +118,21 @@ def volatility(series):
         return 0
 
 # =====================================================
-# SIMPLE ML / FALLBACK MODEL
+# SIMPLE AI (NO ML CRASH)
 # =====================================================
 
-def fallback_prob(rsi, mom):
+def ai_probability(rsi_v, mom):
 
     score = 0
 
-    if rsi < 30:
+    if rsi_v < 30:
         score += 1
     if mom > 0:
         score += 1
+    if rsi_v > 70:
+        score -= 1
 
-    return score / 2
+    return max(0, min(1, score / 2))
 
 # =====================================================
 # LOAD DATA
@@ -194,11 +150,11 @@ price = df["c"].iloc[-1]
 # FEATURES
 # =====================================================
 
-rsi_v = safe_rsi(df["c"])
+rsi_v = rsi(df["c"])
 mom = momentum(df)
 vol = volatility(df["c"])
 
-prob = fallback_prob(rsi_v, mom)
+prob = ai_probability(rsi_v, mom)
 
 # =====================================================
 # DECISION ENGINE
@@ -212,12 +168,18 @@ else:
     decision = "⚪ HOLD"
 
 # =====================================================
-# SAVE
+# SAVE SIGNAL
 # =====================================================
 
 save_signal((
-    price, rsi_v, 0, 0,
-    mom, vol, prob, decision
+    price,
+    rsi_v,
+    0,
+    0,
+    mom,
+    vol,
+    prob,
+    decision
 ))
 
 # =====================================================
@@ -244,16 +206,34 @@ st.write({
 })
 
 # =====================================================
-# LOGS
+# SAFE LOG LOADING (FIXED CRASH)
 # =====================================================
 
 cursor.execute("SELECT * FROM signals ORDER BY id DESC LIMIT 50")
 rows = cursor.fetchall()
 
-log_df = pd.DataFrame(rows, columns=[
+cols = [
     "id","time","price","rsi","macd","signal",
     "momentum","volatility","prob","decision"
-])
+]
+
+if len(rows) == 0:
+    log_df = pd.DataFrame(columns=cols)
+else:
+
+    fixed_rows = []
+
+    for r in rows:
+        r = list(r)
+
+        if len(r) < len(cols):
+            r += [None] * (len(cols) - len(r))
+        elif len(r) > len(cols):
+            r = r[:len(cols)]
+
+        fixed_rows.append(tuple(r))
+
+    log_df = pd.DataFrame(fixed_rows, columns=cols)
 
 st.write("## 📈 Signal History")
 st.dataframe(log_df)
@@ -273,4 +253,4 @@ with col1:
 with col2:
     st.metric("Losses", losses)
 
-st.caption("🚀 ZST NO CRASH SAAS - STABLE VERSION")
+st.caption("🚀 ZST FINAL NO CRASH SAAS - STABLE VERSION")
